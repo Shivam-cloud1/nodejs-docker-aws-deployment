@@ -1,0 +1,22 @@
+{
+  "name": "nodejs-docker-aws-deployment",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A CRUD API deployed to AWS Lambda as a container image",
+  "main": "src/app.js",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.883.0",
+    "@aws-sdk/lib-dynamodb": "^3.883.0",
+    "@codegenie/serverless-express": "^4.17.1",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}

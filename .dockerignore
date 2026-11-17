@@ -1,0 +1,8 @@
+.git
+.github
+node_modules
+tests
+README.md
+template.yaml
+samconfig.toml
+npm-debug.log

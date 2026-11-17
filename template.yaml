@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CRUD HTTP API using a Lambda container image and DynamoDB.
+
+Resources:
+  ItemsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+
+  ItemsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  ItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ItemsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ItemsTable
+      Events:
+        ListItems:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ItemsApi
+            Path: /items
+            Method: GET
+        CreateItem:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ItemsApi
+            Path: /items
+            Method: POST
+        GetItem:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ItemsApi
+            Path: /items/{id}
+            Method: GET
+        UpdateItem:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ItemsApi
+            Path: /items/{id}
+            Method: PUT
+        DeleteItem:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ItemsApi
+            Path: /items/{id}
+            Method: DELETE
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: nodejs22-v1
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the HTTP API.
+    Value: !Sub "https://${ItemsApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ItemsTableName:
+    Description: DynamoDB table storing API items.
+    Value: !Ref ItemsTable
