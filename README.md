@@ -50,6 +50,6 @@ stack.
    repository and the `main` branch.
 2. Grant the role the deployment permissions listed above.
 3. Add the repository secret `AWS_ROLE_ARN` with that role's ARN.
-4. The workflow deploys to AWS Mumbai (`ap-south-1`).
+4. The workflow deploys to AWS Sydney (`ap-southeast-2`).
 
 No long-lived AWS access keys are stored in GitHub.
