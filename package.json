@@ -5,6 +5,8 @@
   "description": "A CRUD API deployed to AWS Lambda as a container image",
   "main": "src/app.js",
   "scripts": {
+    "dev": "node --watch --watch-path=src src/app.js",
+    "start": "node src/app.js",
     "test": "jest --runInBand"
   },
   "engines": {

@@ -150,3 +150,10 @@ const app = createApp();
 exports.app = app;
 exports.createApp = createApp;
 exports.handler = serverlessExpress({ app });
+
+if (require.main === module) {
+  const port = Number(process.env.PORT) || 3000;
+  app.listen(port, () => {
+    console.log(`Local API listening on http://localhost:${port}`);
+  });
+}
