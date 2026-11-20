@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Single EC2 instance running the Node.js API in a Docker container.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-00cf7ebffd8272b25
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-07011322390e222ba
+    Description: Public subnet in the same VPC as the DynamoDB-backed stack.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  ContainerImageUri:
+    Type: String
+    Description: Full ECR image URI, including the tag.
+  ItemsTableName:
+    Type: String
+    Default: nodejs-crud-api-ItemsTable-SLJMCN5VJ2PS
+  CartTableName:
+    Type: String
+    Default: nodejs-crud-api-CartTable-9NKI5WDDMBD9
+  OrdersTableName:
+    Type: String
+    Default: nodejs-crud-api-OrdersTable-1IL2JYPYYBKKP
+
+Resources:
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: No inbound access by default; outbound access for setup and AWS APIs.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ApiInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+        - PolicyName: ReadWriteApiTables
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ItemsTableName}"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${CartTableName}"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${OrdersTableName}"
+
+  ApiInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ApiInstanceRole
+
+  ApiInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref ApiInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref PublicSubnetId
+          GroupSet:
+            - !GetAtt ApiSecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          dnf install -y docker
+          systemctl enable --now docker
+          systemctl enable --now amazon-ssm-agent
+          aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+          docker pull ${ContainerImageUri}
+          docker run -d --name nodejs-crud-api --restart unless-stopped -p 3000:3000 \
+            -e PORT=3000 \
+            -e TABLE_NAME=${ItemsTableName} \
+            -e CART_TABLE_NAME=${CartTableName} \
+            -e ORDERS_TABLE_NAME=${OrdersTableName} \
+            ${ContainerImageUri}
+      Tags:
+        - Key: Name
+          Value: nodejs-crud-api-ec2
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID.
+    Value: !Ref ApiInstance
+  PublicIp:
+    Description: Public IP; port 3000 is initially blocked by the security group.
+    Value: !GetAtt ApiInstance.PublicIp
+  SecurityGroupId:
+    Description: Security group ID; add port 3000 from your IP to test the API.
+    Value: !GetAtt ApiSecurityGroup.GroupId
+  InstanceProfile:
+    Description: Instance profile that grants SSM, ECR pull, and DynamoDB access.
+    Value: !Ref ApiInstanceProfile

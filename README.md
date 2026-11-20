@@ -70,6 +70,48 @@ Grant the deployment identity permissions to create/update CloudFormation
 stacks, Lambda functions, API Gateway APIs, IAM roles, DynamoDB tables, and ECR
 repositories. The deployed API base URL is printed in the stack outputs.
 
+## Run the API on a single EC2 instance
+
+`Dockerfile` is specifically for Lambda. `Dockerfile.ec2` builds a regular
+Node.js HTTP server image for EC2. This deployment can run alongside the
+Lambda stack and uses the same DynamoDB tables.
+
+1. On your computer, create a separate ECR repository, then build and push the
+   EC2 image. Create the repository once:
+
+   ```powershell
+   $region = "ap-southeast-2"
+   $accountId = aws sts get-caller-identity --query Account --output text
+   $repository = "nodejs-crud-api-ec2"
+   aws ecr create-repository --repository-name $repository --region $region
+   aws ecr get-login-password --region $region | docker login --username AWS --password-stdin "$accountId.dkr.ecr.$region.amazonaws.com"
+   docker build -f Dockerfile.ec2 -t "${repository}:latest" .
+   docker tag "${repository}:latest" "$accountId.dkr.ecr.$region.amazonaws.com/${repository}:latest"
+   docker push "$accountId.dkr.ecr.$region.amazonaws.com/${repository}:latest"
+   ```
+
+2. Deploy [ec2.yaml](./ec2.yaml) as a separate stack. It creates one Amazon
+   Linux 2023 instance, installs Docker, pulls the image, and runs the API.
+   The instance profile grants SSM access, ECR pull access, and access to the
+   existing DynamoDB tables:
+
+   ```powershell
+   aws cloudformation deploy --template-file ec2.yaml --stack-name nodejs-crud-api-ec2 --region $region --capabilities CAPABILITY_IAM --parameter-overrides "ContainerImageUri=$accountId.dkr.ecr.$region.amazonaws.com/$repository`:latest"
+   ```
+
+3. The EC2 security group has **no inbound rules by default**. In the AWS
+   Console, open **EC2 → Security Groups**, select the ID in the
+   `SecurityGroupId` stack output, and add an inbound **Custom TCP** rule for
+   port `3000` with source **My IP**. Then test at
+   `http://<PublicIp-output>:3000`.
+
+The API has no authentication. Restrict port 3000 to your IP and do not expose
+it publicly for production use.
+
+The EC2 instance, ECR storage, and public IPv4 address can incur charges. This
+stack runs alongside the Lambda/API Gateway/ALB stack; terminating or deleting
+the EC2 stack does not remove those existing resources or DynamoDB data.
+
 ## GitHub Actions CI/CD
 
 The workflow runs tests for pull requests and pushes. A push to `main` (or
