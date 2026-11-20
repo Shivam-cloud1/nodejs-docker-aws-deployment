@@ -4,6 +4,12 @@ This project exposes an Express CRUD API for items and carts. AWS SAM deploys
 an HTTP API, a Node.js 22 Lambda container image using AWS's Lambda base image,
 and DynamoDB tables for items, carts, and simulated orders.
 
+The HTTP API's default route forwards requests through an API Gateway VPC Link
+to an internal Application Load Balancer (ALB), which invokes the Lambda
+function. The ALB is private and is not directly reachable from the internet.
+The deployment uses the account's existing default VPC and two subnets in
+different Availability Zones. The ALB and VPC Link can incur ongoing charges.
+
 ## API
 
 | Method | Path | Action |

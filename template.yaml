@@ -1,6 +1,20 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: CRUD HTTP API using a Lambda container image and DynamoDB.
+Description: API Gateway routes through a private ALB to a Lambda container image.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-00cf7ebffd8272b25
+    Description: Existing default VPC used by the private ALB and API Gateway VPC Link.
+  VpcCidr:
+    Type: String
+    Default: 172.31.0.0/16
+    Description: CIDR block used to limit VPC Link outbound traffic to the VPC.
+  AlbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-07011322390e222ba,subnet-095b2a23a92741454
+    Description: Two subnets in different Availability Zones in the selected VPC.
 
 Resources:
   ItemsApi:
@@ -79,40 +93,110 @@ Resources:
             Resource:
               - !GetAtt CartTable.Arn
               - !GetAtt OrdersTable.Arn
-      Events:
-        ItemsRoot:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ItemsApi
-            Path: /items
-            Method: ANY
-        ItemsProxy:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ItemsApi
-            Path: /items/{proxy+}
-            Method: ANY
-        CartRoot:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ItemsApi
-            Path: /cart
-            Method: ANY
-        CartProxy:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ItemsApi
-            Path: /cart/{proxy+}
-            Method: ANY
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: .
       DockerTag: nodejs22-v1
 
+  ApiVpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow API Gateway VPC Link traffic to the internal ALB.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref VpcCidr
+
+  ApplicationLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP only from the API Gateway VPC Link.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt ApiVpcLinkSecurityGroup.GroupId
+
+  ApiVpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "${AWS::StackName}-vpc-link"
+      SubnetIds: !Ref AlbSubnetIds
+      SecurityGroupIds:
+        - !GetAtt ApiVpcLinkSecurityGroup.GroupId
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: application
+      IpAddressType: ipv4
+      Subnets: !Ref AlbSubnetIds
+      SecurityGroups:
+        - !GetAtt ApplicationLoadBalancerSecurityGroup.GroupId
+
+  ItemsAlbInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ItemsFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: elasticloadbalancing.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/${AWS::StackName}-items-lambda/*"
+
+  ItemsAlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: ItemsAlbInvokePermission
+    Properties:
+      Name: !Sub "${AWS::StackName}-items-lambda"
+      TargetType: lambda
+      HealthCheckEnabled: false
+      Targets:
+        - Id: !GetAtt ItemsFunction.Arn
+
+  ApplicationLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ItemsAlbTargetGroup
+
+  ApiGatewayAlbIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ItemsApi
+      ConnectionId: !Ref ApiVpcLink
+      ConnectionType: VPC_LINK
+      IntegrationMethod: ANY
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Ref ApplicationLoadBalancerListener
+      PayloadFormatVersion: "1.0"
+      RequestParameters:
+        "overwrite:path": "$request.path"
+
+  ApiGatewayAlbRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ItemsApi
+      RouteKey: "$default"
+      Target: !Sub "integrations/${ApiGatewayAlbIntegration}"
+
 Outputs:
   ApiUrl:
     Description: Base URL for the HTTP API.
     Value: !Sub "https://${ItemsApi}.execute-api.${AWS::Region}.amazonaws.com"
+  AlbDnsName:
+    Description: Private DNS name of the internal Application Load Balancer.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+  ApiVpcLinkId:
+    Description: API Gateway VPC Link connecting to the internal ALB.
+    Value: !Ref ApiVpcLink
   ItemsTableName:
     Description: DynamoDB table storing API items.
     Value: !Ref ItemsTable
