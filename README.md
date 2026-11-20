@@ -1,8 +1,8 @@
 # Node.js CRUD API on AWS Lambda
 
-This project exposes an Express CRUD API for items. AWS SAM deploys an HTTP
-API, a Node.js 22 Lambda container image using AWS's Lambda base image, and a
-DynamoDB table.
+This project exposes an Express CRUD API for items and carts. AWS SAM deploys
+an HTTP API, a Node.js 22 Lambda container image using AWS's Lambda base image,
+and DynamoDB tables for items, carts, and simulated orders.
 
 ## API
 
@@ -13,15 +13,39 @@ DynamoDB table.
 | `POST` | `/items` | Create an item |
 | `PUT` | `/items/{id}` | Update an item |
 | `DELETE` | `/items/{id}` | Delete an item |
+| `POST` | `/cart` | Create a cart |
+| `GET` | `/cart/{cartId}` | Get cart contents and total |
+| `POST` | `/cart/{cartId}/items` | Add a product to a cart |
+| `DELETE` | `/cart/{cartId}/items/{productId}` | Remove a product from a cart |
+| `POST` | `/cart/{cartId}/checkout` | Simulate checkout |
 
 Create and update requests accept JSON such as:
 
 ```json
 {
   "name": "Example",
-  "description": "Optional description"
+  "description": "Optional description",
+  "priceCents": 1299
 }
 ```
+
+Cart item requests use a product ID and quantity; the API reads the price from
+the product record rather than trusting a client-supplied price:
+
+```json
+{
+  "productId": "product-id-from-post-items",
+  "quantity": 2
+}
+```
+
+Checkout records an order with `paymentStatus: "SIMULATED"`. It does not
+connect to a payment provider or charge money. Prices are integer minor units
+(`priceCents`), and products need a positive `priceCents` before they can be
+added to a cart.
+
+The API currently has no authentication. Cart IDs are random, but this is
+still a demo API and should not be used for real customer accounts or payments.
 
 ## Deploy from your machine
 

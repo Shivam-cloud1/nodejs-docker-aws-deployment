@@ -1,22 +1,134 @@
 const { createApp } = require("../src/app");
 
 function createMemoryClient() {
-  const items = new Map();
+  const tables = {
+    items: new Map(),
+    carts: new Map(),
+    orders: new Map(),
+  };
+  const keyOf = (key) =>
+    key.cartId && key.itemKey
+      ? `${key.cartId}:${key.itemKey}`
+      : key.id || key.orderId;
+  const getTable = (tableName) => {
+    const table = tables[tableName];
+    if (!table) {
+      throw new Error(`Unexpected table: ${tableName}`);
+    }
+    return table;
+  };
+  const cancelTransaction = () => {
+    const error = new Error("Transaction cancelled.");
+    error.name = "TransactionCanceledException";
+    throw error;
+  };
+
   return {
     async send(command) {
       const { input } = command;
       switch (command.constructor.name) {
         case "ScanCommand":
-          return { Items: [...items.values()] };
+          return { Items: [...getTable(input.TableName).values()] };
+        case "QueryCommand":
+          return {
+            Items: [...getTable(input.TableName).values()].filter(
+              (item) => item.cartId === input.ExpressionAttributeValues[":cartId"],
+            ),
+          };
         case "GetCommand":
-          return { Item: items.get(input.Key.id) };
+          return { Item: getTable(input.TableName).get(keyOf(input.Key)) };
         case "PutCommand":
-          items.set(input.Item.id, input.Item);
+          getTable(input.TableName).set(keyOf(input.Item), input.Item);
           return {};
         case "DeleteCommand": {
-          const previous = items.get(input.Key.id);
-          items.delete(input.Key.id);
+          const table = getTable(input.TableName);
+          const key = keyOf(input.Key);
+          const previous = table.get(key);
+          table.delete(key);
           return { Attributes: previous };
+        }
+        case "TransactWriteCommand": {
+          const operations = input.TransactItems;
+          for (const operation of operations) {
+            if (operation.ConditionCheck) {
+              const condition = operation.ConditionCheck;
+              const item = getTable(condition.TableName).get(
+                keyOf(condition.Key),
+              );
+              if (!item || item.status !== "OPEN") {
+                cancelTransaction();
+              }
+            }
+            if (operation.Update) {
+              const update = operation.Update;
+              const table = getTable(update.TableName);
+              const item = table.get(keyOf(update.Key));
+              if (update.Key.itemKey === "META" && item?.status !== "OPEN") {
+                cancelTransaction();
+              }
+              if (update.Key.itemKey !== "META" && item) {
+                const names = update.ExpressionAttributeNames;
+                const values = update.ExpressionAttributeValues;
+                if (
+                  item[names["#quantity"]] >
+                  values[":maxExisting"]
+                ) {
+                  cancelTransaction();
+                }
+              }
+            }
+            if (operation.Delete) {
+              const deletion = operation.Delete;
+              if (
+                !getTable(deletion.TableName).has(keyOf(deletion.Key))
+              ) {
+                cancelTransaction();
+              }
+            }
+            if (operation.Put) {
+              const put = operation.Put;
+              if (getTable(put.TableName).has(keyOf(put.Item))) {
+                cancelTransaction();
+              }
+            }
+          }
+
+          for (const operation of operations) {
+            if (operation.Update) {
+              const update = operation.Update;
+              const table = getTable(update.TableName);
+              const key = keyOf(update.Key);
+              const names = update.ExpressionAttributeNames;
+              const values = update.ExpressionAttributeValues;
+              const item = table.get(key) || {
+                ...update.Key,
+              };
+
+              if (update.Key.itemKey === "META") {
+                item[names["#status"]] = values[":checkedOut"];
+                item[names["#orderId"]] = values[":orderId"];
+                item[names["#checkedOutAt"]] = values[":checkedOutAt"];
+              } else {
+                for (const name of Object.keys(names)) {
+                  if (name !== "#quantity") {
+                    item[names[name]] = values[`:${name.slice(1)}`];
+                  }
+                }
+                item[names["#quantity"]] =
+                  (item[names["#quantity"]] || 0) + values[":quantity"];
+              }
+              table.set(key, item);
+            }
+            if (operation.Delete) {
+              const deletion = operation.Delete;
+              getTable(deletion.TableName).delete(keyOf(deletion.Key));
+            }
+            if (operation.Put) {
+              const put = operation.Put;
+              getTable(put.TableName).set(keyOf(put.Item), put.Item);
+            }
+          }
+          return {};
         }
         default:
           throw new Error(`Unexpected command: ${command.constructor.name}`);
@@ -98,3 +210,116 @@ describe("items API", () => {
     });
   });
 });
+
+describe("cart API", () => {
+    async function createProductAndCart(baseUrl) {
+      const productResponse = await fetch(`${baseUrl}/items`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Test product", priceCents: 1299 }),
+      });
+      const product = await productResponse.json();
+      const cartResponse = await fetch(`${baseUrl}/cart`, { method: "POST" });
+      const cart = await cartResponse.json();
+      return { product, cart };
+    }
+
+    it("adds and removes cart items using server-side product prices", async () => {
+      const app = createApp(createMemoryClient(), "items", "carts", "orders");
+
+      await withServer(app, async (baseUrl) => {
+        const { product, cart } = await createProductAndCart(baseUrl);
+        const addResponse = await fetch(`${baseUrl}/cart/${cart.cartId}/items`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            productId: product.id,
+            quantity: 2,
+            priceCents: 1,
+          }),
+        });
+        expect(addResponse.status).toBe(200);
+
+        const fetchedResponse = await fetch(`${baseUrl}/cart/${cart.cartId}`);
+        const fetchedCart = await fetchedResponse.json();
+        expect(fetchedCart.totalCents).toBe(2598);
+        expect(fetchedCart.items).toEqual([
+          {
+            productId: product.id,
+            name: "Test product",
+            priceCents: 1299,
+            quantity: 2,
+          },
+        ]);
+
+        const deleteResponse = await fetch(
+          `${baseUrl}/cart/${cart.cartId}/items/${product.id}`,
+          { method: "DELETE" },
+        );
+        expect(deleteResponse.status).toBe(200);
+        expect((await (await fetch(`${baseUrl}/cart/${cart.cartId}`)).json()).items)
+          .toEqual([]);
+      });
+    });
+
+    it("simulates checkout once and prevents changes to a checked-out cart", async () => {
+      const app = createApp(createMemoryClient(), "items", "carts", "orders");
+
+      await withServer(app, async (baseUrl) => {
+        const { product, cart } = await createProductAndCart(baseUrl);
+        await fetch(`${baseUrl}/cart/${cart.cartId}/items`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ productId: product.id, quantity: 3 }),
+        });
+
+        const checkoutResponse = await fetch(
+          `${baseUrl}/cart/${cart.cartId}/checkout`,
+          { method: "POST" },
+        );
+        expect(checkoutResponse.status).toBe(201);
+        const order = await checkoutResponse.json();
+        expect(order.paymentStatus).toBe("SIMULATED");
+        expect(order.totalCents).toBe(3897);
+
+        const retryResponse = await fetch(
+          `${baseUrl}/cart/${cart.cartId}/checkout`,
+          { method: "POST" },
+        );
+        expect(retryResponse.status).toBe(200);
+        expect((await retryResponse.json()).orderId).toBe(order.orderId);
+
+        const addAfterCheckout = await fetch(
+          `${baseUrl}/cart/${cart.cartId}/items`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ productId: product.id, quantity: 1 }),
+          },
+        );
+        expect(addAfterCheckout.status).toBe(409);
+      });
+    });
+
+    it("requires a product to have a price before adding it to a cart", async () => {
+      const app = createApp(createMemoryClient(), "items", "carts", "orders");
+
+      await withServer(app, async (baseUrl) => {
+        const productResponse = await fetch(`${baseUrl}/items`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "Unpriced product" }),
+        });
+        const product = await productResponse.json();
+        const cartResponse = await fetch(`${baseUrl}/cart`, { method: "POST" });
+        const cart = await cartResponse.json();
+        const addResponse = await fetch(`${baseUrl}/cart/${cart.cartId}/items`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ productId: product.id, quantity: 1 }),
+        });
+
+        expect(addResponse.status).toBe(409);
+      });
+    });
+  });

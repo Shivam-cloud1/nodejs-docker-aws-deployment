@@ -28,6 +28,32 @@ Resources:
         - AttributeName: id
           KeyType: HASH
 
+  CartTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: cartId
+          AttributeType: S
+        - AttributeName: itemKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cartId
+          KeyType: HASH
+        - AttributeName: itemKey
+          KeyType: RANGE
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+
   ItemsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -37,40 +63,47 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref ItemsTable
+          CART_TABLE_NAME: !Ref CartTable
+          ORDERS_TABLE_NAME: !Ref OrdersTable
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ItemsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CartTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - Statement:
+            Effect: Allow
+            Action:
+              - dynamodb:TransactWriteItems
+            Resource:
+              - !GetAtt CartTable.Arn
+              - !GetAtt OrdersTable.Arn
       Events:
-        ListItems:
+        ItemsRoot:
           Type: HttpApi
           Properties:
             ApiId: !Ref ItemsApi
             Path: /items
-            Method: GET
-        CreateItem:
+            Method: ANY
+        ItemsProxy:
           Type: HttpApi
           Properties:
             ApiId: !Ref ItemsApi
-            Path: /items
-            Method: POST
-        GetItem:
+            Path: /items/{proxy+}
+            Method: ANY
+        CartRoot:
           Type: HttpApi
           Properties:
             ApiId: !Ref ItemsApi
-            Path: /items/{id}
-            Method: GET
-        UpdateItem:
+            Path: /cart
+            Method: ANY
+        CartProxy:
           Type: HttpApi
           Properties:
             ApiId: !Ref ItemsApi
-            Path: /items/{id}
-            Method: PUT
-        DeleteItem:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ItemsApi
-            Path: /items/{id}
-            Method: DELETE
+            Path: /cart/{proxy+}
+            Method: ANY
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: .
@@ -83,3 +116,9 @@ Outputs:
   ItemsTableName:
     Description: DynamoDB table storing API items.
     Value: !Ref ItemsTable
+  CartTableName:
+    Description: DynamoDB table storing cart metadata and line items.
+    Value: !Ref CartTable
+  OrdersTableName:
+    Description: DynamoDB table storing simulated checkout orders.
+    Value: !Ref OrdersTable
