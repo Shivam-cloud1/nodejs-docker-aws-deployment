@@ -8,6 +8,7 @@ RUN npm ci --omit=dev
 COPY src/ ./src/
 
 ENV PORT=3000
+ENV API_PATH_PREFIX=/ec2
 EXPOSE 3000
 
 USER node

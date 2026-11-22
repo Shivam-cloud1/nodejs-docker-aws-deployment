@@ -112,13 +112,13 @@ Resources:
   ApplicationLoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP only from the API Gateway VPC Link.
+      GroupDescription: Allow public HTTP to the ALB listener.
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourceSecurityGroupId: !GetAtt ApiVpcLinkSecurityGroup.GroupId
+          CidrIp: 0.0.0.0/0
 
   ApiVpcLink:
     Type: AWS::ApiGatewayV2::VpcLink
@@ -131,7 +131,7 @@ Resources:
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Scheme: internal
+      Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
       Subnets: !Ref AlbSubnetIds
@@ -166,6 +166,7 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ItemsAlbTargetGroup
+  # The EC2 stack adds a path rule to this listener for /ec2/*.
 
   ApiGatewayAlbIntegration:
     Type: AWS::ApiGatewayV2::Integration

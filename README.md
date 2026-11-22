@@ -4,11 +4,12 @@ This project exposes an Express CRUD API for items and carts. AWS SAM deploys
 an HTTP API, a Node.js 22 Lambda container image using AWS's Lambda base image,
 and DynamoDB tables for items, carts, and simulated orders.
 
-The HTTP API's default route forwards requests through an API Gateway VPC Link
-to an internal Application Load Balancer (ALB), which invokes the Lambda
-function. The ALB is private and is not directly reachable from the internet.
-The deployment uses the account's existing default VPC and two subnets in
-different Availability Zones. The ALB and VPC Link can incur ongoing charges.
+The HTTP API routes through an API Gateway VPC Link to a shared internet-facing
+Application Load Balancer (ALB). The ALB forwards normal API paths to Lambda
+and `/ec2/*` paths to the Docker API running on EC2. The ALB is public on HTTP
+port 80; the EC2 container port is only reachable from the ALB. The deployment
+uses the account's existing default VPC and two subnets in different
+Availability Zones. The ALB and VPC Link can incur ongoing charges.
 
 ## API
 
@@ -93,20 +94,25 @@ Lambda stack and uses the same DynamoDB tables.
 2. Deploy [ec2.yaml](./ec2.yaml) as a separate stack. It creates one Amazon
    Linux 2023 instance, installs Docker, pulls the image, and runs the API.
    The instance profile grants SSM access, ECR pull access, and access to the
-   existing DynamoDB tables:
+   existing DynamoDB tables. Get the shared ALB listener and security group
+   IDs from the `nodejs-crud-api` CloudFormation stack resources:
 
    ```powershell
-   aws cloudformation deploy --template-file ec2.yaml --stack-name nodejs-crud-api-ec2 --region $region --capabilities CAPABILITY_IAM --parameter-overrides "ContainerImageUri=$accountId.dkr.ecr.$region.amazonaws.com/$repository`:latest"
+   $listenerArn = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id ApplicationLoadBalancerListener --region $region --query StackResourceDetail.PhysicalResourceId --output text
+   $albSecurityGroupId = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id ApplicationLoadBalancerSecurityGroup --region $region --query StackResourceDetail.PhysicalResourceId --output text
+   aws cloudformation deploy --template-file ec2.yaml --stack-name nodejs-crud-api-ec2 --region $region --capabilities CAPABILITY_IAM --parameter-overrides "ContainerImageUri=$accountId.dkr.ecr.$region.amazonaws.com/$repository`:latest" "LoadBalancerListenerArn=$listenerArn" "LoadBalancerSecurityGroupId=$albSecurityGroupId"
    ```
 
-3. The EC2 security group has **no inbound rules by default**. In the AWS
-   Console, open **EC2 → Security Groups**, select the ID in the
-   `SecurityGroupId` stack output, and add an inbound **Custom TCP** rule for
-   port `3000` with source **My IP**. Then test at
-   `http://<PublicIp-output>:3000`.
+3. Use the `AlbDnsName` output of the `nodejs-crud-api` stack to test both
+   backends:
 
-The API has no authentication. Restrict port 3000 to your IP and do not expose
-it publicly for production use.
+   ```text
+   http://<AlbDnsName>/items       # Lambda
+   http://<AlbDnsName>/ec2/items   # EC2 Docker container
+   ```
+
+The ALB listener is internet-facing and the API has no authentication. This is
+for learning only; do not expose it publicly for production use.
 
 The EC2 instance, ECR storage, and public IPv4 address can incur charges. This
 stack runs alongside the Lambda/API Gateway/ALB stack; terminating or deleting

@@ -90,6 +90,16 @@ function createApp(
 ) {
   const app = express();
   app.use(express.json());
+  const pathPrefix = process.env.API_PATH_PREFIX;
+  if (pathPrefix) {
+    const normalizedPrefix = `/${pathPrefix.replace(/^\/+|\/+$/g, "")}`;
+    app.use((req, _res, next) => {
+      if (req.url === normalizedPrefix || req.url.startsWith(`${normalizedPrefix}/`)) {
+        req.url = req.url.slice(normalizedPrefix.length) || "/";
+      }
+      return next();
+    });
+  }
   app.use((_req, _res, next) => {
     if (!tableName) {
       return next(new Error("TABLE_NAME environment variable is required."));
@@ -180,6 +190,8 @@ function createApp(
     }
     return res.json({ message: "Item deleted." });
   });
+
+  app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
   app.post("/cart", async (_req, res, next) => {
     if (!cartTableName) {

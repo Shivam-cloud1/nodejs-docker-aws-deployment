@@ -262,6 +262,32 @@ describe("cart API", () => {
       });
     });
 
+    describe("EC2 ALB path prefix", () => {
+      it("strips the configured prefix and serves the ALB health check", async () => {
+        const previousPrefix = process.env.API_PATH_PREFIX;
+        process.env.API_PATH_PREFIX = "/ec2";
+        const app = createApp(createMemoryClient(), "items", "carts", "orders");
+
+        try {
+          await withServer(app, async (baseUrl) => {
+            const healthResponse = await fetch(`${baseUrl}/ec2/health`);
+            expect(healthResponse.status).toBe(200);
+            expect(await healthResponse.json()).toEqual({ status: "ok" });
+
+            const itemsResponse = await fetch(`${baseUrl}/ec2/items`);
+            expect(itemsResponse.status).toBe(200);
+            expect(await itemsResponse.json()).toEqual([]);
+          });
+        } finally {
+          if (previousPrefix === undefined) {
+            delete process.env.API_PATH_PREFIX;
+          } else {
+            process.env.API_PATH_PREFIX = previousPrefix;
+          }
+        }
+      });
+    });
+
     it("simulates checkout once and prevents changes to a checked-out cart", async () => {
       const app = createApp(createMemoryClient(), "items", "carts", "orders");
 

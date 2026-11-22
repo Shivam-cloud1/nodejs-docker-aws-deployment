@@ -27,6 +27,12 @@ Parameters:
   OrdersTableName:
     Type: String
     Default: nodejs-crud-api-OrdersTable-1IL2JYPYYBKKP
+  LoadBalancerListenerArn:
+    Type: String
+    Description: Listener ARN from the Lambda/API Gateway stack.
+  LoadBalancerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group ID from the Lambda/API Gateway stack.
 
 Resources:
   ApiSecurityGroup:
@@ -37,6 +43,11 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroupId
 
   ApiInstanceRole:
     Type: AWS::IAM::Role
@@ -110,6 +121,7 @@ Resources:
           docker pull ${ContainerImageUri}
           docker run -d --name nodejs-crud-api --restart unless-stopped -p 3000:3000 \
             -e PORT=3000 \
+            -e API_PATH_PREFIX=/ec2 \
             -e TABLE_NAME=${ItemsTableName} \
             -e CART_TABLE_NAME=${CartTableName} \
             -e ORDERS_TABLE_NAME=${OrdersTableName} \
@@ -117,6 +129,35 @@ Resources:
       Tags:
         - Key: Name
           Value: nodejs-crud-api-ec2
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: instance
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3000
+      HealthCheckEnabled: true
+      HealthCheckPath: /ec2/health
+      Matcher:
+        HttpCode: "200"
+      Targets:
+        - Id: !Ref ApiInstance
+          Port: 3000
+
+  ApiLoadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref LoadBalancerListenerArn
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /ec2
+            - /ec2/*
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
 
 Outputs:
   InstanceId:
@@ -131,3 +172,6 @@ Outputs:
   InstanceProfile:
     Description: Instance profile that grants SSM, ECR pull, and DynamoDB access.
     Value: !Ref ApiInstanceProfile
+  ApiTargetGroupArn:
+    Description: Target group that registers the EC2 container with the shared ALB.
+    Value: !Ref ApiTargetGroup
