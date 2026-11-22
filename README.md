@@ -4,12 +4,12 @@ This project exposes an Express CRUD API for items and carts. AWS SAM deploys
 an HTTP API, a Node.js 22 Lambda container image using AWS's Lambda base image,
 and DynamoDB tables for items, carts, and simulated orders.
 
-The HTTP API routes through an API Gateway VPC Link to a shared internet-facing
-Application Load Balancer (ALB). The ALB forwards normal API paths to Lambda
-and `/ec2/*` paths to the Docker API running on EC2. The ALB is public on HTTP
-port 80; the EC2 container port is only reachable from the ALB. The deployment
-uses the account's existing default VPC and two subnets in different
-Availability Zones. The ALB and VPC Link can incur ongoing charges.
+The HTTP API invokes Lambda directly. A shared internet-facing Application
+Load Balancer (ALB) also forwards normal API paths to Lambda and `/ec2/*` paths
+to the Docker API running on EC2. The ALB is public on HTTP port 80; the EC2
+container port is only reachable from the ALB. The deployment uses the
+account's existing default VPC and two subnets in different Availability
+Zones. The ALB can incur ongoing charges.
 
 ## API
 
@@ -98,8 +98,8 @@ Lambda stack and uses the same DynamoDB tables.
    IDs from the `nodejs-crud-api` CloudFormation stack resources:
 
    ```powershell
-   $listenerArn = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id ApplicationLoadBalancerListener --region $region --query StackResourceDetail.PhysicalResourceId --output text
-   $albSecurityGroupId = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id ApplicationLoadBalancerSecurityGroup --region $region --query StackResourceDetail.PhysicalResourceId --output text
+   $listenerArn = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id SharedApplicationLoadBalancerListener --region $region --query StackResourceDetail.PhysicalResourceId --output text
+   $albSecurityGroupId = aws cloudformation describe-stack-resource --stack-name nodejs-crud-api --logical-resource-id SharedAlbSecurityGroup --region $region --query StackResourceDetail.PhysicalResourceId --output text
    aws cloudformation deploy --template-file ec2.yaml --stack-name nodejs-crud-api-ec2 --region $region --capabilities CAPABILITY_IAM --parameter-overrides "ContainerImageUri=$accountId.dkr.ecr.$region.amazonaws.com/$repository`:latest" "LoadBalancerListenerArn=$listenerArn" "LoadBalancerSecurityGroupId=$albSecurityGroupId"
    ```
 
